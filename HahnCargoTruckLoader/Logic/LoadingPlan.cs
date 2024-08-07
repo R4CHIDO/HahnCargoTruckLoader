@@ -1,122 +1,135 @@
-using HahnCargoTruckLoader.Model;
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
-namespace HahnCargoTruckLoader.Logic
+public class LoadingPlan
 {
-    public class LoadingPlan
+    private readonly Dictionary<int, LoadingInstruction> instructions;
+    private readonly Truck truck;
+    private readonly List<Crate> crates;
+
+    public LoadingPlan(Truck truck, List<Crate> crates)
     {
-        private readonly Dictionary<int, LoadingInstruction> instructions;
-        private readonly Truck truck;
-        private readonly List<Crate> crates;
+        this.truck = truck;
+        this.crates = crates;
+        this.instructions = new Dictionary<int, LoadingInstruction>();
+    }
 
-        public LoadingPlan(Truck truck, List<Crate> crates)
+    public Dictionary<int, LoadingInstruction> GetLoadingInstructions()
+    {
+        var usedSpace = new bool[truck.Width, truck.Height, truck.Length];
+        int stepNumber = 0;
+
+        foreach (var crate in crates)
         {
-            this.truck = truck;
-            this.crates = crates;
-            instructions = new Dictionary<int, LoadingInstruction>();
-        }
+            bool placed = false;
 
-        public Dictionary<int, LoadingInstruction> GetLoadingInstructions()
-        {
-            // Initialize occupied space tracker
-            bool[,,] cargoSpace = new bool[truck.Width, truck.Height, truck.Length];
-            int step = 1;
-
-            // Try placing each crate
-            foreach (var crate in crates)
+            // Try all orientations for the crate
+            foreach (var orientation in GetPossibleOrientations(crate))
             {
-                bool placed = false;
-
-                // Try all orientations
-                foreach (var orientation in crate.GetOrientations())
+                // Attempt to place the crate in every possible position in the truck
+                for (int x = 0; x <= truck.Width - orientation.Width; x++)
                 {
-                    if (TryPlaceCrate(crate, orientation, cargoSpace, out var position, out var turns))
+                    for (int y = 0; y <= truck.Height - orientation.Height; y++)
                     {
-                        // Create and store loading instruction
-                        instructions[crate.CrateID] = new LoadingInstruction
+                        for (int z = 0; z <= truck.Length - orientation.Length; z++)
                         {
-                            LoadingStepNumber = step++,
-                            CrateId = crate.CrateID,
-                            TopLeftX = position.Item1,
-                            TopLeftY = position.Item2,
-                            TurnHorizontal = turns.Item1,
-                            TurnVertical = turns.Item2
-                        };
-                        placed = true;
-                        break;
-                    }
-                }
+                            if (CanPlaceCrate(usedSpace, x, y, z, orientation))
+                            {
+                                PlaceCrate(usedSpace, x, y, z, orientation);
 
-                if (!placed)
-                {
-                    throw new Exception("Could not place all crates.");
-                }
-            }
+                                instructions[crate.CrateID] = new LoadingInstruction
+                                {
+                                    LoadingStepNumber = stepNumber++,
+                                    CrateId = crate.CrateID,
+                                    TopLeftX = x,
+                                    TopLeftY = y,
+                                    TurnHorizontal = orientation.TurnHorizontal,
+                                    TurnVertical = orientation.TurnVertical
+                                };
 
-            return instructions;
-        }
-
-        private bool TryPlaceCrate(Crate crate, (int width, int height, int length) orientation, bool[,,] cargoSpace, 
-                                   out (int, int) position, out (bool, bool) turns)
-        {
-            turns = (false, false);
-            position = (-1, -1);
-
-            var (crateWidth, crateHeight, crateLength) = orientation;
-
-            // Try to fit the crate in every possible position
-            for (int x = 0; x <= truck.Width - crateWidth; x++)
-            {
-                for (int y = 0; y <= truck.Height - crateHeight; y++)
-                {
-                    for (int z = 0; z <= truck.Length - crateLength; z++)
-                    {
-                        if (CanPlace(crateWidth, crateHeight, crateLength, x, y, z, cargoSpace))
-                        {
-                            // Mark the crate as placed
-                            PlaceCrate(crateWidth, crateHeight, crateLength, x, y, z, cargoSpace);
-                            position = (x, y);
-                            return true;
+                                placed = true;
+                                break;
+                            }
                         }
+                        if (placed) break;
                     }
+                    if (placed) break;
                 }
+                if (placed) break;
             }
 
-            return false;
+            if (!placed)
+            {
+                throw new Exception($"Unable to place crate with ID {crate.CrateID}");
+            }
         }
 
-        private bool CanPlace(int crateWidth, int crateHeight, int crateLength, int startX, int startY, int startZ, bool[,,] cargoSpace)
+        return instructions;
+    }
+
+    private IEnumerable<Crate> GetPossibleOrientations(Crate crate)
+    {
+        // Create a new crate instance with the adjusted dimensions for each possible orientation
+        yield return CreateOrientedCrate(crate, false, false);
+        yield return CreateOrientedCrate(crate, true, false);
+        yield return CreateOrientedCrate(crate, false, true);
+        yield return CreateOrientedCrate(crate, true, true);
+    }
+
+    private Crate CreateOrientedCrate(Crate crate, bool turnHorizontal, bool turnVertical)
+    {
+        var orientedCrate = new Crate
         {
-            for (int x = startX; x < startX + crateWidth; x++)
+            CrateID = crate.CrateID,
+            Width = crate.Width,
+            Height = crate.Height,
+            Length = crate.Length
+        };
+
+        // Apply the turns based on the LoadingInstruction
+        orientedCrate.Turn(new LoadingInstruction
+        {
+            TurnHorizontal = turnHorizontal,
+            TurnVertical = turnVertical
+        });
+
+        return new Crate
+        {
+            CrateID = orientedCrate.CrateID,
+            Width = orientedCrate.Width,
+            Height = orientedCrate.Height,
+            Length = orientedCrate.Length,
+            TurnHorizontal = turnHorizontal,
+            TurnVertical = turnVertical
+        };
+    }
+
+    private bool CanPlaceCrate(bool[,,] usedSpace, int x, int y, int z, Crate orientation)
+    {
+        for (int i = x; i < x + orientation.Width; i++)
+        {
+            for (int j = y; j < y + orientation.Height; j++)
             {
-                for (int y = startY; y < startY + crateHeight; y++)
+                for (int k = z; k < z + orientation.Length; k++)
                 {
-                    for (int z = startZ; z < startZ + crateLength; z++)
-                    {
-                        if (cargoSpace[x, y, z])
-                        {
-                            return false; // Space is already occupied
-                        }
-                    }
+                    if (i >= truck.Width || j >= truck.Height || k >= truck.Length || usedSpace[i, j, k])
+                        return false;
                 }
             }
-            return true;
         }
+        return true;
+    }
 
-        private void PlaceCrate(int crateWidth, int crateHeight, int crateLength, int startX, int startY, int startZ, bool[,,] cargoSpace)
+    private void PlaceCrate(bool[,,] usedSpace, int x, int y, int z, Crate orientation)
+    {
+        for (int i = x; i < x + orientation.Width; i++)
         {
-            for (int x = startX; x < startX + crateWidth; x++)
+            for (int j = y; j < y + orientation.Height; j++)
             {
-                for (int y = startY; y < startY + crateHeight; y++)
+                for (int k = z; k < z + orientation.Length; k++)
                 {
-                    for (int z = startZ; z < startZ + crateLength; z++)
-                    {
-                        cargoSpace[x, y, z] = true;
-                    }
+                    usedSpace[i, j, k] = true;
                 }
             }
         }
